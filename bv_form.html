@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Bharat Vansh Rebon - Patient Form (Offline + Online)</title>
+<style>
+  body { font-family: Arial, sans-serif; max-width: 1100px; margin: 18px auto; padding: 10px; }
+  h1 { font-size: 20px; margin-bottom: 6px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; }
+  .col { flex:1 1 220px; min-width:200px; }
+  label { display:block; font-size:13px; margin-bottom:4px; }
+  input[type="text"], input[type="number"], textarea { width:100%; padding:8px; box-sizing:border-box; }
+  textarea { resize:vertical; min-height:60px; }
+  button { padding:8px 12px; margin-right:6px; cursor:pointer; }
+  table { width:100%; border-collapse:collapse; margin-top:14px; font-size:14px; }
+  th, td { border:1px solid #ddd; padding:8px; text-align:left; vertical-align:middle; }
+  img.preview { max-width:80px; max-height:80px; display:block; }
+  .controls { margin-top:8px; }
+  .status { margin-top:8px; font-size:13px; color:#444; }
+  .small { font-size:12px; color:#666; }
+  .btn-danger { background:#e74c3c; color:white; border:none; }
+  .btn-primary { background:#2b7cff; color:white; border:none; }
+  .btn-success { background:#2ecc71; color:white; border:none; }
+  .btn-ghost { background:transparent; border:1px solid #ccc; }
+  .topbar { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:12px; }
+  .searchInput { width:260px; }
+</style>
+</head>
+<body>
+
+<h1>Bharat Vansh Rebon Foundation – Patient Record Form</h1>
+<div class="topbar">
+  <div class="small">Mode: <span id="onlineStatus">Checking...</span></div>
+  <div>
+    <input id="searchInput" class="searchInput" placeholder="Search by Patient ID or Name" />
+    <button id="btnSearch" class="btn-ghost">Search</button>
+    <button id="btnClearFilter" class="btn-ghost">Clear</button>
+  </div>
+</div>
+
+<form id="patientForm" onsubmit="return false;">
+  <div class="row">
+    <div class="col">
+      <label>Patient ID</label>
+      <input type="text" id="patientId" required placeholder="e.g. BVR001" />
+    </div>
+    <div class="col">
+      <label>Name</label>
+      <input type="text" id="name" required />
+    </div>
+    <div class="col">
+      <label>Father Name</label>
+      <input type="text" id="fatherName" />
+    </div>
+    <div class="col">
+      <label>Age</label>
+      <input type="number" id="age" min="0" />
+    </div>
+  </div>
+
+  <div class="row" style="margin-top:8px;">
+    <div class="col">
+      <label>Contact Number</label>
+      <input type="text" id="contactNo" />
+    </div>
+    <div class="col">
+      <label>Addiction</label>
+      <input type="text" id="addiction" />
+    </div>
+    <div class="col" style="flex: 2 1 420px;">
+      <label>Address</label>
+      <textarea id="address"></textarea>
+    </div>
+  </div>
+
+  <div style="margin-top:8px; display:flex; gap:12px; align-items:center;">
+    <div>
+      <label>Patient Photo (jpg / png)</label>
+      <input type="file" id="photoInput" accept="image/*" />
+      <div style="margin-top:6px;"><img id="photoPreview" class="preview" alt="" /></div>
+    </div>
+
+    <div style="align-self:flex-end;">
+      <button id="btnSave" class="btn-primary">Save (Local)</button>
+      <button id="btnSaveAndSync" class="btn-success">Save & Sync (If Online)</button>
+      <button id="btnClear" class="btn-ghost">Clear</button>
+    </div>
+  </div>
+</form>
+
+<div class="controls">
+  <button id="btnSyncAll" class="btn-primary">Sync All to Firebase</button>
+  <button id="btnExport" class="btn-ghost">Export CSV</button>
+  <input type="file" id="importCsv" accept=".csv" style="display:inline-block; margin-left:8px;" />
+  <span class="small">Tip: Open devtools Console for detailed logs.</span>
+</div>
+
+<div id="listContainer">
+  <table id="patientsTable">
+    <thead>
+      <tr>
+        <th>#</th><th>Patient ID</th><th>Name</th><th>Father</th><th>Age</th><th>Contact</th><th>Addiction</th><th>Photo</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="status" id="statusBox"></div>
+
+<!-- Firebase SDKs (you'll need internet to use these) -->
+<!-- We'll use modular v9 imports via CDN; if you prefer compat, replace accordingly. -->
+<script type="module">
+
+/* =========================
+   CONFIGURE FIREBASE HERE
+   =========================
+   1) Create a Firebase project (https://console.firebase.google.com)
+   2) Add a Web App and copy the firebaseConfig object below.
+   3) Enable Firestore (Database) and Firebase Storage.
+   4) IMPORTANT: For a quick start, set Firestore rules and Storage rules to allow writes while testing,
+      but secure them for production.
+   5) Paste your config into firebaseConfig variable.
+*/
+const firebaseConfig = {
+  // <-- REPLACE with your Firebase config --
+  // apiKey: "AIza....",
+  // authDomain: "your-project.firebaseapp.com",
+  // projectId: "your-project-id",
+  // storageBucket: "your-project-id.appspot.com",
+  // messagingSenderId: "1234567890",
+  // appId: "1:123456:web:abcd"
+};
+
+// Flag whether Firebase is configured (simple check)
+const firebaseEnabled = firebaseConfig && firebaseConfig.projectId && firebaseConfig.apiKey;
+
+/* =========================
+   Firebase initialization (if provided)
+   ========================= */
+let db = null;
+let storage = null;
+if (firebaseEnabled) {
+  import("https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js").then(({ initializeApp }) => {
+    import("https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js").then((firestore) => {
+      import("https://www.gstatic.com/firebasejs/9.22.2/firebase-storage.js").then((fbStorage) => {
+        const app = initializeApp(firebaseConfig);
+        db = firestore.getFirestore(app);
+        storage = fbStorage.getStorage(app);
+        logStatus("Firebase initialized. Ready to sync.");
+      }).catch(err => console.error("Storage import error", err));
+    }).catch(err => console.error("Firestore import error", err));
+  }).catch(err => console.error("Firebase import error", err));
+} else {
+  console.log("Firebase not configured — online sync disabled until you add firebaseConfig.");
+}
+
+/* =========================
+   Local storage helpers
+   ========================= */
+const STORAGE_KEY = "bvre_patients_v1";
+
+function loadLocal() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("loadLocal error", e);
+    return [];
+  }
+}
+function saveLocal(arr) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(arr));
+}
+
+/* =========================
+   Utilities
+   ========================= */
+function uid() {
+  // simple unique id
+  return 'id-' + Math.random().toString(36).slice(2,10);
+}
+function nowISO(){ return new Date().toISOString(); }
+function logStatus(msg) {
+  const el = document.getElementById('statusBox');
+  el.textContent = msg;
+  console.log(msg);
+}
+
+/* =========================
+   Form handling & image -> base64
+   ========================= */
+const photoInput = document.getElementById('photoInput');
+const photoPreview = document.getElementById('photoPreview');
+let currentImageBase64 = ""; // stores base64 string for current form
+
+photoInput.addEventListener('change', (ev)=>{
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) { photoPreview.src = ""; currentImageBase64 = ""; return; }
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    currentImageBase64 = e.target.result; // data:image/png;base64,...
+    photoPreview.src = currentImageBase64;
+  };
+  reader.readAsDataURL(f);
+});
+
+/* =========================
+   CRUD: Save (local), render list
+   ========================= */
+const formEls = {
+  patientId: document.getElementById('patientId'),
+  name: document.getElementById('name'),
+  fatherName: document.getElementById('fatherName'),
+  address: document.getElementById('address'),
+  age: document.getElementById('age'),
+  contactNo: document.getElementById('contactNo'),
+  addiction: document.getElementById('addiction'),
+};
+
+document.getElementById('btnSave').addEventListener('click', ()=> saveLocalOnly(false));
+document.getElementById('btnSaveAndSync').addEventListener('click', ()=> saveLocalOnly(true));
+document.getElementById('btnClear').addEventListener('click', clearForm);
+
+function getFormData() {
+  return {
+    uid: uid(),
+    patientId: formEls.patientId.value.trim(),
+    name: formEls.name.value.trim(),
+    fatherName: formEls.fatherName.value.trim(),
+    address: formEls.address.value.trim(),
+    age: formEls.age.value ? Number(formEls.age.value) : null,
+    contactNo: formEls.contactNo.value.trim(),
+    addiction: formEls.addiction.value.trim(),
+    photoBase64: currentImageBase64 || "",
+    createdAt: nowISO(),
+    synced: false,
+    remoteId: null
+  };
+}
+
+function saveLocalOnly(trySyncAfter=false) {
+  const data = getFormData();
+  if (!data.patientId || !data.name) {
+    alert("Please enter Patient ID and Name at minimum.");
+    return;
+  }
+  const arr = loadLocal();
+  // check duplicate patientId? we'll allow multiple but better to replace same patientId
+  const existIndex = arr.findIndex(r => r.patientId === data.patientId);
+  if (existIndex >= 0) {
+    // update existing
+    data.uid = arr[existIndex].uid; // preserve uid
+    data.createdAt = arr[existIndex].createdAt || data.createdAt;
+    data.synced = false;
+    arr[existIndex] = data;
+  } else {
+    arr.push(data);
+  }
+  saveLocal(arr);
+  renderList();
+  clearForm();
+  logStatus("Saved locally. Records: " + arr.length);
+  if (trySyncAfter && navigator.onLine && firebaseEnabled) {
+    syncRecordToFirebase(data).then(()=> renderList());
+  }
+}
+
+/* =========================
+   Render table
+   ========================= */
+function renderList(filterText="") {
+  const tbody = document.querySelector('#patientsTable tbody');
+  tbody.innerHTML = "";
+  const arr = loadLocal();
+  const filtered = arr.filter(r => {
+    if (!filterText) return true;
+    const s = filterText.toLowerCase();
+    return (r.patientId && r.patientId.toLowerCase().includes(s)) ||
+           (r.name && r.name.toLowerCase().includes(s));
+  });
+  filtered.forEach((r, idx) => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${idx+1}</td>
+      <td>${escapeHtml(r.patientId)}</td>
+      <td>${escapeHtml(r.name)}</td>
+      <td>${escapeHtml(r.fatherName||"")}</td>
+      <td>${r.age!==null? r.age : ""}</td>
+      <td>${escapeHtml(r.contactNo||"")}</td>
+      <td>${escapeHtml(r.addiction||"")}</td>
+      <td>${r.photoBase64 ? '<img src="'+r.photoBase64+'" class="preview" />' : ''}</td>
+      <td>
+        <button class="btn-ghost" data-uid="${r.uid}" onclick="editRecord('${r.uid}')">Edit</button>
+        <button class="btn-danger" data-uid="${r.uid}" onclick="deleteRecord('${r.uid}')">Delete</button>
+        <button class="btn-primary" data-uid="${r.uid}" onclick="syncSingle('${r.uid}')">Sync</button>
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+  document.getElementById('onlineStatus').textContent = navigator.onLine ? "Online" : "Offline";
+}
+window.editRecord = function(uidVal) {
+  const arr = loadLocal();
+  const rec = arr.find(r=>r.uid===uidVal);
+  if (!rec) return;
+  formEls.patientId.value = rec.patientId;
+  formEls.name.value = rec.name;
+  formEls.fatherName.value = rec.fatherName;
+  formEls.address.value = rec.address;
+  formEls.age.value = rec.age || "";
+  formEls.contactNo.value = rec.contactNo;
+  formEls.addiction.value = rec.addiction;
+  currentImageBase64 = rec.photoBase64 || "";
+  photoPreview.src = currentImageBase64;
+  // scroll to top
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+window.deleteRecord = function(uidVal) {
+  if (!confirm('Delete this record?')) return;
+  let arr = loadLocal();
+  arr = arr.filter(r=> r.uid !== uidVal);
+  saveLocal(arr);
+  renderList();
+  logStatus('Record deleted.');
+}
+
+/* =========================
+   Sync logic (Firestore + Storage)
+   ========================= */
+import { getFirestore, doc, setDoc, collection, addDoc } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-firestore.js";
+import { getStorage, ref as sRef, uploadString, getDownloadURL } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-storage.js";
+import { getApp, initializeApp } from "https://www.gstatic.com/firebasejs/9.22.2/firebase-app.js";
+
+async function syncAllToFirebase() {
+  if (!firebaseEnabled) { alert("Firebase not configured. Set firebaseConfig at top of file."); return; }
+  if (!navigator.onLine) { alert("You are offline. Connect to internet to sync."); return; }
+  try {
+    const arr = loadLocal();
+    let cnt = 0;
+    for (const r of arr) {
+      if (!r.synced) {
+        await syncRecordToFirebase(r);
+        cnt++;
+      }
+    }
+    logStatus(`Sync finished. ${cnt} records synced.`);
+    renderList();
+  } catch (e) {
+    console.error("syncAll error", e);
+    logStatus("Sync error: " + (e.message||e));
+  }
+}
+
+async function syncRecordToFirebase(record) {
+  if (!firebaseEnabled) throw new Error("Firebase not configured.");
+  if (!navigator.onLine) throw new Error("Offline.");
+  // initialize app if needed
+  try {
+    if (!getApp().options) { initializeApp(firebaseConfig); }
+  } catch (e) {
+    try { initializeApp(firebaseConfig); } catch(e2) {}
+  }
+  const dbLocal = getFirestore(getApp());
+  const storageLocal = getStorage(getApp());
+
+  // if image exists, upload to storage and get URL
+  let photoUrl = "";
+  if (record.photoBase64) {
+    // store under folder patients/{patientId}_{uid}.png
+    const ext = record.photoBase64.startsWith('data:image/jpeg') ? 'jpg' : 'png';
+    const filename = `patients/${record.patientId || record.uid}.${ext}`;
+    const storageReference = sRef(storageLocal, filename);
+    // uploadString accepts 'data_url'
+    await uploadString(storageReference, record.photoBase64, 'data_url');
+    photoUrl = await getDownloadURL(storageReference);
+  }
+
+  // Prepare payload (exclude large base64 to keep Firestore small)
+  const payload = {
+    patientId: record.patientId,
+    name: record.name,
+    fatherName: record.fatherName,
+    address: record.address,
+    age: record.age,
+    contactNo: record.contactNo,
+    addiction: record.addiction,
+    photoUrl: photoUrl,
+    createdAt: record.createdAt || nowISO(),
+    syncedAt: nowISO()
+  };
+
+  // write to a collection 'patients' with doc id = record.uid or patientId
+  const col = collection(dbLocal, "patients");
+  // Use patientId as doc id if exists (helps searching)
+  const docId = record.patientId || record.uid;
+  await setDoc(doc(dbLocal, "patients", docId), payload);
+  // mark local as synced
+  const arr = loadLocal();
+  const idx = arr.findIndex(x => x.uid === record.uid);
+  if (idx>=0) {
+    arr[idx].synced = true;
+    arr[idx].remoteId = docId;
+    saveLocal(arr);
+  }
+  logStatus(`Record ${record.patientId || record.uid} synced to Firebase.`);
+}
+
+window.syncSingle = function(uid) {
+  const arr = loadLocal();
+  const rec = arr.find(r=>r.uid===uid);
+  if (!rec) { alert("Record not found locally."); return; }
+  if (!firebaseEnabled) { alert("Firebase not configured."); return; }
+  if (!navigator.onLine) { alert("Please go online to sync."); return; }
+  syncRecordToFirebase(rec).then(()=> renderList()).catch(e=> alert("Sync failed: "+e.message));
+};
+
+/* =========================
+   Utility: Escape HTML
+   ========================= */
+function escapeHtml(text) {
+  if (!text && text!==0) return "";
+  return text.toString().replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]; });
+}
+
+/* =========================
+   Export & Import CSV
+   ========================= */
+document.getElementById('btnExport').addEventListener('click', ()=>{
+  const arr = loadLocal();
+  if (!arr.length) { alert("No records to export."); return; }
+  const header = ['SrNo','PatientID','Name','FatherName','Address','Age','ContactNo','Addiction','PhotoBase64','CreatedAt','Synced'];
+  const rows = arr.map((r,i)=> [
+    i+1,
+    r.patientId,
+    r.name,
+    r.fatherName,
+    r.address,
+    r.age,
+    r.contactNo,
+    r.addiction,
+    // include base64 (may be large) - optional
+    r.photoBase64 ? r.photoBase64 : "",
+    r.createdAt,
+    r.synced ? "1" : "0"
+  ]);
+  const csv = [header.join(','), ...rows.map(r=> r.map(c => '"' + ( (c||'').toString().replace(/"/g,'""') ) + '"' ).join(','))].join('\n');
+  const blob = new Blob([csv], {type:'text/csv;charset=utf-8;'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'bvre_patients_export.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('importCsv').addEventListener('change', (ev)=>{
+  const f = ev.target.files && ev.target.files[0];
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const txt = e.target.result;
+    parseAndImportCsv(txt);
+  };
+  reader.readAsText(f, 'utf-8');
+});
+
+function parseAndImportCsv(txt) {
+  const lines = txt.split(/\r?\n/).filter(Boolean);
+  if (!lines.length) return;
+  const header = lines[0].split(',').map(h=>h.replace(/(^"|"$)/g,'').trim());
+  const items = [];
+  for (let i=1;i<lines.length;i++){
+    const cols = splitCsvLine(lines[i]);
+    if (cols.length < 2) continue;
+    const obj = {};
+    header.forEach((h, idx) => {
+      obj[h] = cols[idx] ? cols[idx].replace(/^"|"$/g,'') : "";
+    });
+    // map fields
+    const record = {
+      uid: uid(),
+      patientId: obj.PatientID || obj.patientId || ('imp' + i),
+      name: obj.Name || "",
+      fatherName: obj.FatherName || "",
+      address: obj.Address || "",
+      age: obj.Age ? Number(obj.Age) : null,
+      contactNo: obj.ContactNo || obj.contactNo || "",
+      addiction: obj.Addiction || "",
+      photoBase64: obj.PhotoBase64 || "",
+      createdAt: obj.CreatedAt || nowISO(),
+      synced: obj.Synced === "1"
+    };
+    items.push(record);
+  }
+  // merge with local, replacing same patientId
+  const arr = loadLocal();
+  for (const r of items) {
+    const idx = arr.findIndex(x => x.patientId === r.patientId);
+    if (idx>=0) arr[idx] = r;
+    else arr.push(r);
+  }
+  saveLocal(arr);
+  renderList();
+  alert("Import complete. Records now: " + arr.length);
+}
+function splitCsvLine(line) {
+  // simple CSV splitter supporting quoted fields
+  const re = /("([^"]|"""|\\")*"|[^,]*)(?:,|$)/g;
+  const out = [];
+  let m;
+  while ((m = re.exec(line)) !== null) {
+    if (m[1] === "") continue;
+    const val = m[1].trim();
+    out.push(val.replace(/^"|"$/g,''));
+    if (re.lastIndex >= line.length) break;
+  }
+  return out;
+}
+
+/* =========================
+   Search
+   ========================= */
+document.getElementById('btnSearch').addEventListener('click', ()=>{
+  const q = document.getElementById('searchInput').value.trim();
+  renderList(q);
+});
+document.getElementById('btnClearFilter').addEventListener('click', ()=>{
+  document.getElementById('searchInput').value = "";
+  renderList("");
+});
+
+/* =========================
+   Clear form
+   ========================= */
+function clearForm() {
+  formEls.patientId.value = "";
+  formEls.name.value = "";
+  formEls.fatherName.value = "";
+  formEls.address.value = "";
+  formEls.age.value = "";
+  formEls.contactNo.value = "";
+  formEls.addiction.value = "";
+  photoInput.value = "";
+  photoPreview.src = "";
+  currentImageBase64 = "";
+}
+
+/* =========================
+   Online/offline auto sync and init
+   ========================= */
+window.addEventListener('online', ()=> {
+  document.getElementById('onlineStatus').textContent = "Online";
+  logStatus("You are online.");
+  // optionally auto sync
+  // autoSyncAllOnReconnect();
+});
+window.addEventListener('offline', ()=> {
+  document.getElementById('onlineStatus').textContent = "Offline";
+  logStatus("You are offline.");
+});
+
+document.getElementById('btnSyncAll').addEventListener('click', ()=> {
+  if (!firebaseEnabled) { alert("Firebase config missing. Edit the HTML and paste firebaseConfig."); return; }
+  syncAllToFirebase();
+});
+
+/* =========================
+   INITIALIZE UI
+   ========================= */
+renderList();
+document.getElementById('onlineStatus').textContent = navigator.onLine ? "Online" : "Offline";
+logStatus("Ready. Local records: " + loadLocal().length);
+
+</script>
+
+</body>
+</html>
